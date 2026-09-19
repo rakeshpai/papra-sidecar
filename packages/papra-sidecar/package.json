@@ -1,0 +1,26 @@
+{
+  "name": "@papra-sidecar/papra-sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "start": "node dist/main.js",
+    "dev": "tsx watch src/main.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "@papra-sidecar/shared": "workspace:*",
+    "hono": "^4.6.14",
+    "pino": "^9.5.0",
+    "yaml": "^2.6.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "vitest": "^3.0.0"
+  }
+}
