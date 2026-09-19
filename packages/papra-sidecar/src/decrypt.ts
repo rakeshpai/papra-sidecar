@@ -19,6 +19,10 @@ function runQpdf(inputPath: string, outputPath: string, password?: string): stri
   return (result.stderr ?? '').trim();
 }
 
+export function isPdfUnencrypted(inputPath: string): boolean {
+  return runQpdf(inputPath, `${inputPath}.probe`) === '';
+}
+
 export function decryptPdf(inputPath: string, outputPath: string, password?: string): DecryptResult {
   if (password === undefined || password === '') {
     copyFileSync(inputPath, outputPath);

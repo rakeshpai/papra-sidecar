@@ -1,12 +1,16 @@
 import { z } from 'zod';
 
-export const webhookFieldsSchema = z.object({
-  from: z.string().min(1),
-  to: z.string().min(1),
-  subject: z.string(),
-  date: z.string().min(1),
-  messageId: z.string(),
-});
+export const webhookFieldsSchema = z
+  .object({
+    from: z.string().min(1),
+    to: z.string().min(1),
+    subject: z.string(),
+    date: z.string().min(1),
+    messageId: z.string(),
+    originalFrom: z.string().optional(),
+    originalTo: z.string().optional(),
+  })
+  .strict();
 
 export type WebhookFields = z.infer<typeof webhookFieldsSchema>;
 

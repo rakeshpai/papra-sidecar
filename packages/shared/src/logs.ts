@@ -19,6 +19,7 @@ export const droppedLogSchema = z.object({
   from: z.string(),
   to: z.string(),
   subject: z.string(),
+  reason: z.string().optional(),
 });
 
 export type DroppedLogLine = z.infer<typeof droppedLogSchema>;

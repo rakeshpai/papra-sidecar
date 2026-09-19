@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   failureLogSchema,
+  globalRuleSchema,
   ruleSchema,
   sidecarConfigSchema,
   webhookFieldsSchema,
@@ -10,17 +11,42 @@ import {
 describe('webhookFieldsSchema', () => {
   it('accepts a valid payload', () => {
     const result = webhookFieldsSchema.safeParse({
-      from: 'statement@bank.com',
+      from: 'person1+caf_=papra-ingest=rakeshpai.me@gmail.com',
       to: 'papra-ingest@rakeshpai.me',
       subject: 'September Statement',
       date: '2026-09-18T10:00:00.000Z',
       messageId: '<abc@mailer.bank.com>',
+      originalFrom: 'statement@bank.com',
+      originalTo: 'person1@gmail.com',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts a payload without original fields', () => {
+    const result = webhookFieldsSchema.safeParse({
+      from: 'statement@bank.com',
+      to: 'papra-ingest@rakeshpai.me',
+      subject: 'x',
+      date: '2026-09-18T10:00:00.000Z',
+      messageId: 'm',
     });
     expect(result.success).toBe(true);
   });
 
   it('rejects missing from/to', () => {
     const result = webhookFieldsSchema.safeParse({ subject: 'x' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects unknown keys', () => {
+    const result = webhookFieldsSchema.safeParse({
+      from: 'a@b.c',
+      to: 'papra-ingest@rakeshpai.me',
+      subject: 'x',
+      date: '2026-09-18T10:00:00.000Z',
+      messageId: 'm',
+      unexpected: true,
+    });
     expect(result.success).toBe(false);
   });
 });
@@ -76,6 +102,29 @@ describe('ruleSchema', () => {
   });
 });
 
+describe('globalRuleSchema', () => {
+  it('accepts a from-tags rule', () => {
+    const result = globalRuleSchema.safeParse({
+      from: 'person1@gmail.com',
+      tags: ['person1'],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts a domain-suffix to rule', () => {
+    const result = globalRuleSchema.safeParse({
+      originalTo: '@bank.com',
+      tags: ['bank'],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a rule without tags', () => {
+    const result = globalRuleSchema.safeParse({ from: 'a@b.c' });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe('sidecarConfigSchema', () => {
   it('defaults ocrLanguages to en', () => {
     const config = sidecarConfigSchema.parse({
@@ -84,14 +133,36 @@ describe('sidecarConfigSchema', () => {
         apiToken: 'token',
         organizationId: 'org_1',
       },
+      allowedSenders: ['person1@gmail.com'],
       rules: [],
     });
     expect(config.papra.defaultOcrLanguages).toEqual(['en']);
   });
 
+  it('requires allowedSenders', () => {
+    const result = sidecarConfigSchema.safeParse({
+      papra: { apiUrl: 'http://papra:1221', apiToken: 't', organizationId: 'o' },
+      rules: [],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts fallbackTag and globalRules', () => {
+    const config = sidecarConfigSchema.parse({
+      papra: { apiUrl: 'http://papra:1221', apiToken: 't', organizationId: 'o' },
+      allowedSenders: ['person1@gmail.com'],
+      fallbackTag: 'adhoc-email-ingest',
+      globalRules: [{ from: 'person1@gmail.com', tags: ['person1'] }],
+      rules: [],
+    });
+    expect(config.fallbackTag).toBe('adhoc-email-ingest');
+    expect(config.globalRules).toEqual([{ from: 'person1@gmail.com', tags: ['person1'] }]);
+  });
+
   it('rejects config without rules array', () => {
     const result = sidecarConfigSchema.safeParse({
       papra: { apiUrl: 'http://papra:1221', apiToken: 't', organizationId: 'o' },
+      allowedSenders: [],
     });
     expect(result.success).toBe(false);
   });

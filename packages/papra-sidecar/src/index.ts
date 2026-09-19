@@ -9,13 +9,13 @@ import type { AppEnv } from './env.js';
 import type { SidecarLogger } from './logger.js';
 import { processJob, type JobInput } from './process.js';
 import { createJobQueue } from './queue.js';
-import { matchRule } from './rules.js';
+import { isAllowedSender, matchRule, type EmailIdentity } from './rules.js';
 
 const MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
 
 export interface WebhookJob {
   input: JobInput;
-  rule: Rule;
+  rule: Rule | null;
 }
 
 export interface AppDeps {
@@ -61,6 +61,8 @@ export function buildApp(deps: AppDeps): Hono {
       subject: form.get('subject'),
       date: form.get('date'),
       messageId: form.get('messageId'),
+      originalFrom: form.get('originalFrom') ?? undefined,
+      originalTo: form.get('originalTo') ?? undefined,
     });
     if (!fieldsResult.success) {
       return c.text('Invalid payload', 400);
@@ -82,6 +84,8 @@ export function buildApp(deps: AppDeps): Hono {
       to: fields.to,
       subject: fields.subject,
       date: fields.date,
+      ...(fields.originalFrom !== undefined ? { originalFrom: fields.originalFrom } : {}),
+      ...(fields.originalTo !== undefined ? { originalTo: fields.originalTo } : {}),
       file: {
         filename: file.name,
         data: fileBytes,
@@ -89,8 +93,14 @@ export function buildApp(deps: AppDeps): Hono {
       },
     };
 
-    const rule = matchRule(config, { from: input.from, to: input.to });
-    if (rule === null) {
+    const identity: EmailIdentity = {
+      from: input.from,
+      to: input.to,
+      originalFrom: input.originalFrom ?? '',
+      originalTo: input.originalTo ?? '',
+    };
+
+    if (!isAllowedSender(config, identity)) {
       logger.dropped({
         level: 'dropped',
         timestamp: new Date().toISOString(),
@@ -98,10 +108,12 @@ export function buildApp(deps: AppDeps): Hono {
         from: input.from,
         to: input.to,
         subject: input.subject,
+        reason: 'sender not whitelisted',
       });
       return c.json({ ok: true, dropped: true }, 202);
     }
 
+    const rule = matchRule(config, identity);
     queue.enqueue({ input, rule });
     return c.json({ ok: true }, 202);
   });

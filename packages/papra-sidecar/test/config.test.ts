@@ -28,6 +28,7 @@ papra:
   apiUrl: http://papra:1221
   apiToken: token
   organizationId: org_1
+allowedSenders: [person1@gmail.com]
 rules:
   - from: statement@bank.com
     namePrefix: Bank
@@ -47,6 +48,7 @@ papra:
   apiToken: token
   organizationId: org_1
   defaultOcrLanguages: [en, hi]
+allowedSenders: [person1@gmail.com]
 defaultTagColor: '#e11d48'
 rules:
   - from: statement@bank.com
@@ -68,6 +70,32 @@ rules:
     expect(config.defaultTagColor).toBe('#e11d48');
   });
 
+  it('parses allowedSenders, fallbackTag and globalRules', () => {
+    const path = writeConfig(`
+papra:
+  apiUrl: http://papra:1221
+  apiToken: token
+  organizationId: org_1
+allowedSenders:
+  - person1@gmail.com
+  - person2@gmail.com
+fallbackTag: adhoc-email-ingest
+globalRules:
+  - from: person1@gmail.com
+    tags: [person1]
+  - originalTo: '@bank.com'
+    tags: [bank]
+rules: []
+`);
+    const config = loadConfig(path);
+    expect(config.allowedSenders).toEqual(['person1@gmail.com', 'person2@gmail.com']);
+    expect(config.fallbackTag).toBe('adhoc-email-ingest');
+    expect(config.globalRules).toEqual([
+      { from: 'person1@gmail.com', tags: ['person1'] },
+      { originalTo: '@bank.com', tags: ['bank'] },
+    ]);
+  });
+
   it('throws on invalid config', () => {
     const path = writeConfig('papra: {}\n');
     expect(() => loadConfig(path)).toThrow();
@@ -79,6 +107,7 @@ papra:
   apiUrl: http://papra:1221
   apiToken: token
   organizationId: org_1
+  allowedSenders: [person1@gmail.com]
 rules: []
 bogus: true
 `);

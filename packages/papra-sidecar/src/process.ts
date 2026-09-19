@@ -2,11 +2,16 @@ import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Rule, SidecarConfig } from '@papra-sidecar/shared';
-import { decryptPdf } from './decrypt.js';
+import { decryptPdf, isPdfUnencrypted } from './decrypt.js';
 import { extractMarkdown } from './docling.js';
 import { SidecarLogger } from './logger.js';
-import { buildDocumentName, parseEmailDate } from './name.js';
+import {
+  buildDocumentName,
+  buildDocumentNameFromSubject,
+  parseEmailDate,
+} from './name.js';
 import { PapraClient } from './papra.js';
+import { collectGlobalTags, type EmailIdentity } from './rules.js';
 
 export const EXTRACTION_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_TAG_COLOR = '#6b7280';
@@ -17,18 +22,16 @@ export interface JobInput {
   to: string;
   subject: string;
   date: string;
+  originalFrom?: string;
+  originalTo?: string;
   file: { filename: string; contentType?: string; data: Uint8Array };
 }
 
 export interface ProcessContext {
   config: SidecarConfig;
-  rule: Rule;
+  rule: Rule | null;
   doclingBaseUrl: string;
   logDir: string;
-}
-
-function ocrLanguagesFor(config: SidecarConfig, rule: Rule): string[] {
-  return rule.ocrLanguages ?? config.papra.defaultOcrLanguages;
 }
 
 export async function processJob(input: JobInput, ctx: ProcessContext): Promise<void> {
@@ -44,6 +47,12 @@ export async function processJob(input: JobInput, ctx: ProcessContext): Promise<
     from: input.from,
     to: input.to,
   };
+  const identity: EmailIdentity = {
+    from: input.from,
+    to: input.to,
+    originalFrom: input.originalFrom ?? '',
+    originalTo: input.originalTo ?? '',
+  };
 
   try {
     step = 'decrypt';
@@ -51,20 +60,47 @@ export async function processJob(input: JobInput, ctx: ProcessContext): Promise<
     writeFileSync(inputPath, input.file.data);
 
     const decryptedPath = join(tempDir, 'decrypted.pdf');
-    const decryptResult = decryptPdf(inputPath, decryptedPath, ctx.rule.password);
-    if (decryptResult.kind === 'failed') {
-      logger.failure({ ...failureBase, step, error: decryptResult.reason });
-      return;
+    if (ctx.rule === null) {
+      if (!isPdfUnencrypted(inputPath)) {
+        logger.dropped({
+          level: 'dropped',
+          timestamp,
+          messageId: input.messageId,
+          from: input.from,
+          to: input.to,
+          subject: input.subject,
+          reason: 'encrypted pdf with no matching rule',
+        });
+        return;
+      }
+      copyFileSync(inputPath, decryptedPath);
+    } else {
+      const decryptResult = decryptPdf(inputPath, decryptedPath, ctx.rule.password);
+      if (decryptResult.kind === 'failed') {
+        logger.failure({ ...failureBase, step, error: decryptResult.reason });
+        return;
+      }
     }
 
     step = 'docling';
-    const documentName = buildDocumentName(ctx.rule.namePrefix, parseEmailDate(input.date));
+    const emailDate = parseEmailDate(input.date);
+    const documentName =
+      ctx.rule === null
+        ? buildDocumentNameFromSubject(input.subject, emailDate)
+        : buildDocumentName(ctx.rule.namePrefix, emailDate);
     const namedPath = join(tempDir, documentName);
     copyFileSync(decryptedPath, namedPath);
+
+    const ocrLanguages =
+      ctx.rule !== null && ctx.rule.ocrLanguages !== undefined
+        ? ctx.rule.ocrLanguages
+        : ctx.config.papra.defaultOcrLanguages;
+    const forceOcr = ctx.rule?.forceOcr ?? false;
+
     const markdown = await extractMarkdown(namedPath, {
       baseUrl: ctx.doclingBaseUrl,
-      ocrLanguages: ocrLanguagesFor(ctx.config, ctx.rule),
-      forceOcr: ctx.rule.forceOcr ?? false,
+      ocrLanguages,
+      forceOcr,
     });
 
     step = 'papra:create';
@@ -82,7 +118,12 @@ export async function processJob(input: JobInput, ctx: ProcessContext): Promise<
     await papra.patchDocument(document.id, { name: documentName, content: markdown });
 
     step = 'papra:tags';
-    const tagIds = await ensureTags(papra, ctx.config, ctx.rule);
+    const globalTags = collectGlobalTags(ctx.config, identity);
+    const tags =
+      ctx.rule === null
+        ? [...globalTags, ...(ctx.config.fallbackTag !== undefined ? [ctx.config.fallbackTag] : [])]
+        : [...ctx.rule.tags, ...globalTags];
+    const tagIds = await ensureTags(papra, ctx.config, tags, ctx.rule?.tagColor);
     for (const tagId of tagIds) {
       await papra.addTagToDocument(document.id, tagId);
     }
@@ -95,8 +136,8 @@ export async function processJob(input: JobInput, ctx: ProcessContext): Promise<
       to: input.to,
       documentId: document.id,
       documentName,
-      ocrLanguages: ocrLanguagesFor(ctx.config, ctx.rule),
-      tags: ctx.rule.tags,
+      ocrLanguages,
+      tags,
     });
   } catch (error) {
     logger.failure({
@@ -112,20 +153,21 @@ export async function processJob(input: JobInput, ctx: ProcessContext): Promise<
 async function ensureTags(
   papra: PapraClient,
   config: SidecarConfig,
-  rule: Rule,
+  tags: string[],
+  color?: string,
 ): Promise<string[]> {
   const existing = await papra.listTags();
   const byName = new Map(existing.map((tag) => [tag.name.toLowerCase(), tag]));
   const tagIds: string[] = [];
-  for (const name of rule.tags) {
+  for (const name of tags) {
     const key = name.toLowerCase();
     const existingTag = byName.get(key);
     if (existingTag !== undefined) {
       tagIds.push(existingTag.id);
       continue;
     }
-    const color = rule.tagColor ?? config.defaultTagColor ?? DEFAULT_TAG_COLOR;
-    const created = await papra.createTag(name, color);
+    const resolvedColor = color ?? config.defaultTagColor ?? DEFAULT_TAG_COLOR;
+    const created = await papra.createTag(name, resolvedColor);
     byName.set(key, created);
     tagIds.push(created.id);
   }

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PDFDocument } from 'pdf-lib';
 import { afterEach, describe, expect, it } from 'vitest';
-import { decryptPdf } from '../src/decrypt.js';
+import { decryptPdf, isPdfUnencrypted } from '../src/decrypt.js';
 
 let tempDirs: string[] = [];
 
@@ -34,6 +34,22 @@ async function writeEncryptedPdf(path: string, password: string): Promise<void> 
     stdio: 'pipe',
   });
 }
+
+describe('isPdfUnencrypted', () => {
+  it('detects an unencrypted pdf', async () => {
+    const dir = tmpDir();
+    const input = join(dir, 'plain.pdf');
+    await writePdf(input);
+    expect(isPdfUnencrypted(input)).toBe(true);
+  });
+
+  it('detects an encrypted pdf', async () => {
+    const dir = tmpDir();
+    const input = join(dir, 'encrypted.pdf');
+    await writeEncryptedPdf(input, 'secret');
+    expect(isPdfUnencrypted(input)).toBe(false);
+  });
+});
 
 describe('decryptPdf', () => {
   it('copies the file as-is when no password is configured', async () => {

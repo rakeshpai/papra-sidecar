@@ -6,7 +6,8 @@ const email: Email = {
   headers: [],
   headerLines: [],
   attachments: [],
-  from: { name: '', address: 'original@bank.com' },
+  from: { name: '', address: 'statement@bank.com' },
+  to: [{ name: 'Person One', address: 'person1@gmail.com' }],
   subject: 'Sep Statement',
   date: 'Fri, 18 Sep 2026 10:00:00 +0530',
   messageId: '<m1@mailer.bank.com>',
@@ -32,6 +33,8 @@ describe('buildWebhookFormData', () => {
     expect(form.get('subject')).toBe('Sep Statement');
     expect(form.get('date')).toBe('Fri, 18 Sep 2026 10:00:00 +0530');
     expect(form.get('messageId')).toBe('<m1@mailer.bank.com>');
+    expect(form.get('originalFrom')).toBe('statement@bank.com');
+    expect(form.get('originalTo')).toBe('person1@gmail.com');
   });
 
   it('includes the pdf file bytes with original filename', async () => {
@@ -58,6 +61,8 @@ describe('buildWebhookFormData', () => {
     });
     expect(form.get('subject')).toBe('');
     expect(form.get('messageId')).toBe('');
+    expect(form.get('originalFrom')).toBeNull();
+    expect(form.get('originalTo')).toBeNull();
     expect((form.get('date') as string).length).toBeGreaterThan(0);
   });
 });

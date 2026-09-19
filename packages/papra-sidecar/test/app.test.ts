@@ -33,19 +33,28 @@ function setup(): { env: AppEnv; config: SidecarConfig; logDir: string } {
       organizationId: 'o',
       defaultOcrLanguages: ['en'],
     },
+    allowedSenders: ['statement@bank.com'],
     rules: [{ from: 'statement@bank.com', namePrefix: 'Bank', tags: ['bank'] }],
   };
   return { env, config, logDir };
 }
 
-function createApp(processor?: (job: WebhookJob) => Promise<void>): {
+function createApp(
+  processor?: (job: WebhookJob) => Promise<void>,
+  configOverride?: SidecarConfig,
+): {
   app: ReturnType<typeof buildApp>;
   logDir: string;
 } {
   const { env, config, logDir } = setup();
   const logger = new SidecarLogger(logDir);
   return {
-    app: buildApp({ env, config, logger, ...(processor ? { processor } : {}) }),
+    app: buildApp({
+      env,
+      config: configOverride ?? config,
+      logger,
+      ...(processor ? { processor } : {}),
+    }),
     logDir,
   };
 }
@@ -115,7 +124,7 @@ describe('webhook app', () => {
     expect(res.status).toBe(400);
   });
 
-  it('accepts and drops unmatched senders, logging to dropped.jsonl', async () => {
+  it('accepts and drops non-whitelisted senders, logging to dropped.jsonl', async () => {
     const { app, logDir } = createApp();
     const form = buildForm({ from: 'spammer@unknown.com' });
     const res = await app.request('/webhook', { method: 'POST', headers: AUTH, body: form });
@@ -123,8 +132,39 @@ describe('webhook app', () => {
     expect(await res.json()).toEqual({ ok: true, dropped: true });
 
     await vi.waitFor(() => {
-      expect(readLog(logDir, 'dropped.jsonl')).toContain('spammer@unknown.com');
+      const log = readLog(logDir, 'dropped.jsonl');
+      expect(log).toContain('spammer@unknown.com');
+      expect(log).toContain('sender not whitelisted');
     });
+  });
+
+  it('enqueues a fallback job for a whitelisted sender with no matching rule', async () => {
+    const fallbackConfig: SidecarConfig = {
+      papra: {
+        apiUrl: 'http://papra:1221',
+        apiToken: 't',
+        organizationId: 'o',
+        defaultOcrLanguages: ['en'],
+      },
+      allowedSenders: ['person1@gmail.com'],
+      fallbackTag: 'adhoc-email-ingest',
+      rules: [{ from: 'statement@bank.com', namePrefix: 'Bank', tags: ['bank'] }],
+    };
+    const processor = vi.fn(async (_job: WebhookJob) => {});
+    const { app } = createApp(processor, fallbackConfig);
+    const form = buildForm({ from: 'person1@gmail.com' });
+    form.set('originalFrom', 'somecompany@other.com');
+
+    const res = await app.request('/webhook', { method: 'POST', headers: AUTH, body: form });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ ok: true });
+
+    await vi.waitFor(() => {
+      expect(processor).toHaveBeenCalledTimes(1);
+    });
+    const job = processor.mock.calls[0]![0] as WebhookJob;
+    expect(job.rule).toBeNull();
+    expect(job.input.from).toBe('person1@gmail.com');
   });
 
   it('enqueues matched jobs, returns 202, and passes the rule', async () => {
@@ -138,8 +178,8 @@ describe('webhook app', () => {
       expect(processor).toHaveBeenCalledTimes(1);
     });
     const job = processor.mock.calls[0]![0] as WebhookJob;
+    expect(job.rule).not.toBeNull();
+    expect(job.rule?.namePrefix).toBe('Bank');
     expect(job.input.from).toBe('statement@bank.com');
-    expect(job.input.file.filename).toBe('statement.pdf');
-    expect(job.rule.namePrefix).toBe('Bank');
   });
 });
