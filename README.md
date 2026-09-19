@@ -222,8 +222,8 @@ In the `papra-sidecar` repo settings → Secrets and variables → Actions:
 |---|---|
 | `CLOUDFLARE_API_TOKEN` | wrangler deploy (permissions: Workers Scripts edit) |
 | `CLOUDFLARE_ACCOUNT_ID` | your Cloudflare account id |
-| `WORKER_WEBHOOK_URL` | `https://papra-ingest.rakeshpai.me/webhook` |
-| `WORKER_WEBHOOK_SECRET` | shared webhook secret |
+| `WEBHOOK_URL` | `https://papra-ingest.rakeshpai.me/webhook` |
+| `WEBHOOK_SECRET` | shared webhook secret |
 
 Deploys: worker deploys on every push to `main`; the container is published to
 ghcr when you push a tag:

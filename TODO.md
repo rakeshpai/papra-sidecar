@@ -73,8 +73,8 @@ Legend: 🔧 = code, 🧪 = test, 📦 = packaging, 🚀 = deploy, 📋 = manual
       - Container → buildx `linux/amd64,linux/arm64` → `ghcr.io/rakeshpai/papra-sidecar`
         (`latest` on main, `vX.Y.Z` + `vX.Y` on tags).
 - [ ] 5.2 📋 Set repo secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`,
-      `WORKER_WEBHOOK_URL`, `WORKER_WEBHOOK_SECRET`.
-- [ ] 5.3 🚀 Release a `v0.1.0` tag to publish the image to ghcr.
+      `WEBHOOK_URL`, `WEBHOOK_SECRET`.
+- [x] 5.3 🚀 Release a `v0.1.0` tag to publish the image to ghcr.
 
 ## Phase 6 — home-server-setup integration
 
