@@ -124,12 +124,26 @@ papra:
   apiUrl: "http://papra:1221"          # Papra service on the docker network
   apiToken: "papra-api-token"           # needs documents:create/read/update, tags:read/create
   organizationId: "org_xxx"             # Papra organization id
-  defaultOcrLanguages: ["en"]           # used when a rule omits ocrLanguages
+  defaultOcrLanguages: ["en"]           # global OCR language (fallback)
+
+allowedSenders:                         # REQUIRED — only these are processed at all
+  - person1@gmail.com                   # Gmail +-suffix (SRS) aliases match automatically
+  - person2@gmail.com
 
 defaultTagColor: "#6b7280"              # color for tags auto-created in Papra
 
+fallbackTag: "adhoc-email-ingest"       # optional; tag added to every no-rule document
+
+globalRules:                            # optional; tags applied to EVERY processed email
+  - from: "person1@gmail.com"           #   matches envelope from
+    tags: ["person1"]
+  - originalFrom: "statement@bank.com"  #   matches the From: header
+    tags: ["bank"]
+  - originalTo: "@bank.com"             #   '@...' = domain-suffix match
+    tags: ["bank"]
+
 rules:
-  - from: "statement@hdfcbank.com"       # sender address (case-insensitive)
+  - from: "statement@hdfcbank.com"       # sender (From: header or envelope)
     to: "papra-ingest@rakeshpai.me"      # optional constraint on recipient
     password: "abc123"                   # decryption password (omit for plain PDFs)
     namePrefix: "HDFC-Statement"         # document name → HDFC-Statement-2026-09.pdf
@@ -140,9 +154,19 @@ rules:
 ```
 
 Notes:
-- One rule per sender; first matching `from` (+ optional `to`) wins.
-- Unknown senders are **dropped and logged** to `dropped.jsonl`.
-- A wrong password is logged to `failures.jsonl` (no retry in this version).
+- **`allowedSenders` gates everything**: an email whose sender (envelope `from`,
+  or `originalFrom` as a fallback) is not whitelisted is dropped and logged to
+  `dropped.jsonl` with `reason: "sender not whitelisted"`.
+- **One `rules` entry per sender**; first matching `from` (+ optional `to`) wins.
+- **Global rules** apply to all processed emails (specific-rule or fallback) and
+  only add tags. A `@domain.com` value matches by domain suffix. Addresses are
+  normalized (lowercased, Gmail `+`-suffix stripped), so Gmail SRS aliases like
+  `person1+caf_=…@gmail.com` match `person1@gmail.com`.
+- **Fallback**: emails from a whitelisted sender with no matching rule are still
+  processed **if the PDF is unencrypted** (encrypted ones are dropped and logged).
+  They are named from the subject (`{sanitizedSubject}-{YYYY-MM}.pdf`), use the
+  global `defaultOcrLanguages`, and get the `fallbackTag` if configured.
+- A wrong password on a specific rule is logged to `failures.jsonl` (no retry).
 - If a rule has a password but the PDF is actually unencrypted, it is still
   processed (plain-copy fallback).
 - The document name uses the **email date** → `{namePrefix}-{YYYY-MM}.pdf`.
@@ -265,7 +289,8 @@ Steps:
    content and the configured tags.
 3. Inspect logs:
    - `docker/papra-sidecar/logs/processed.jsonl` — success lines
-   - `docker/papra-sidecar/logs/dropped.jsonl` — unknown senders
+   - `docker/papra-sidecar/logs/dropped.jsonl` — non-whitelisted senders and
+     fallback PDFs that couldn't be processed (reason included)
    - `docker/papra-sidecar/logs/failures.jsonl` — decrypt / docling / Papra errors
 4. Re-send the same statement → Papra's dedup should avoid a duplicate.
 

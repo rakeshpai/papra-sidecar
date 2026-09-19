@@ -76,9 +76,14 @@ the host; it is reached through the existing `cloudflared` tunnel ingress
   worker observability) and not forwarded.
 - **Forwarding**: single multipart/form-data POST to `WEBHOOK_URL` with header
   `Authorization: Bearer ${WEBHOOK_SECRET}`:
-  - `from` — sender address observed by Email Routing
-  - `to` — recipient address observed by Email Routing (`papra-ingest@rakeshpai.me`)
-  - `subject` — email subject
+  - `from` — **envelope** sender observed by Email Routing (`message.from`). For
+    Gmail-forwarded mail this is the family member's Gmail address (SRS-rewritten,
+    e.g. `person1+caf_=papra-ingest=rakeshpai.me@gmail.com`).
+  - `to` — **envelope** recipient observed by Email Routing (`message.to`, always
+    `papra-ingest@rakeshpai.me`).
+  - `originalFrom` — `From:` header address (the original bank/company sender).
+  - `originalTo` — first `To:` header address.
+  - `subject` — email subject (used for fallback document naming)
   - `date` — RFC 2822 date header (used for document naming)
   - `messageId` — `Message-Id` header (for logging/idempotency tracing)
   - `file` — the chosen PDF bytes, original filename preserved
@@ -108,34 +113,48 @@ Node 22 + [Hono](https://hono.dev), ESM, TypeScript with strictest settings.
 1. Authenticate.
 2. Parse multipart body; validate against the shared webhook payload schema
    (zod).
-3. Match a config rule:
-   - `from` must equal rule `from` (case-insensitive);
-   - if the rule has `to`, it must equal the observed `to` (case-insensitive);
-   - first matching rule wins.
-   - No match → log to `dropped.jsonl` and return `202` (accepted-and-ignored,
-     so the worker doesn't bounce spam/unknown senders).
-4. Enqueue a job on the in-memory FIFO queue (concurrency 1) and return `202`.
+3. Build an email identity: `from`, `to`, `originalFrom`, `originalTo`
+   (normalized: lowercased, Gmail `+`-suffix stripped from the local part).
+4. **Whitelist gate** (`allowedSenders`): the normalized envelope `from` (or
+   `originalFrom` as a fallback) must be in `allowedSenders`. Anything else is
+   dropped + logged to `dropped.jsonl` with `reason: "sender not whitelisted"`
+   and returns `202` (accepted-and-ignored, so the worker doesn't bounce mail).
+5. Match a specific `rules` entry: `rule.from` matches `originalFrom` **or**
+   `from`; optional `rule.to` matches `originalTo` **or** `to`; first match wins.
+   - If found → enqueue a **specific-rule job** (uses rule password, namePrefix,
+     ocrLanguages, tags).
+   - If not found → enqueue a **fallback job** (see pipeline below).
+6. Enqueue on the in-memory FIFO queue (concurrency 1) and return `202`.
 
 #### Job pipeline (per email, serialized)
 
 1. **Persist**: write uploaded PDF to a temp file.
-2. **Decrypt** (if rule has `password`):
+2. **Decrypt / gate**:
+   - Specific rule: if the rule has a `password`, `qpdf --decrypt --password=…`;
+     on failure retry without a password (in case the sender sent a plain PDF).
+     Both failing → `failures.jsonl` and stop.
+   - Fallback (no rule): `qpdf --decrypt` without a password succeeds only for
+     **unencrypted** PDFs. Encrypted → drop + log to `dropped.jsonl` with
+     `reason: "encrypted pdf with no matching rule"`. Unencrypted → copy as-is.
    - `qpdf --decrypt --password=<pw> <in> <out>`;
    - on failure, retry `qpdf --decrypt <in> <out>` (in case the sender sent an
      unencrypted PDF) — if that succeeds, log a warning and proceed;
    - if both fail → failure log (`invalid password / corrupt PDF`) and stop.
    - No password in rule → use the PDF as-is.
-3. **Name**: rename decrypted file to `{namePrefix}-{YYYY-MM}.pdf`, where
-   `YYYY-MM` derives from the email `date` header (fallback to current time).
-   This becomes the Papra document name (Papra names documents from the uploaded
-   filename).
+3. **Name**:
+   - Specific rule: `{namePrefix}-{YYYY-MM}.pdf`.
+   - Fallback: `{sanitizedSubject}-{YYYY-MM}.pdf` (subject sanitized for
+     filenames, capped at 80 chars).
+   - `YYYY-MM` derives from the email `date` header (fallback to current time).
+   - This becomes the Papra document name (Papra names documents from the uploaded
+     filename).
 4. **Parse with docling**:
    - `POST {DOCLING_BASE_URL}/v1/convert/file` (multipart):
      - `files` = decrypted PDF,
      - `to_formats` = `md`,
      - `image_export_mode` = `placeholder`,
-     - `ocr_lang` = each configured language (repeatable), default `en` when the
-       rule omits `ocrLanguages`,
+     - `ocr_lang` = each configured language (repeatable); specific rules may
+       override, otherwise `papra.defaultOcrLanguages` (defaults to `["en"]`),
      - `force_ocr` = rule `forceOcr` (default `false`).
    - Response: `{ document: { md_content } }`. Strip `<!-- image -->`
      placeholders (same as Papra does).
@@ -151,10 +170,12 @@ Node 22 + [Hono](https://hono.dev), ESM, TypeScript with strictest settings.
    docling extraction cannot overwrite our English content afterwards.
 7. **Patch content**: `PATCH .../documents/{id}` with `content` = our docling
    markdown (and `name` = the chosen name, belt-and-suspenders).
-8. **Tags**: for each configured tag name —
+8. **Tags**: the tag set is —
+   - specific rule: `rule.tags` ∪ all matching `globalRules` tags;
+   - fallback: all matching `globalRules` tags ∪ `fallbackTag` (if configured).
+   For each tag name —
    - `GET .../tags`, find by name (cache the mapping);
-   - if missing, `POST .../tags` with `{ name, color: defaultTagColor }`
-     (`tags:create` needed);
+   - if missing, `POST .../tags` with `{ name, color }` (`tags:create` needed);
    - `POST .../documents/{id}/tags` with `{ tagId }` (`tags:read` +
      `documents:update` needed). Re-adding an existing tag is idempotent.
 9. **Success**: append a line to `processed.jsonl` with context (messageId,
@@ -165,7 +186,8 @@ Node 22 + [Hono](https://hono.dev), ESM, TypeScript with strictest settings.
 - Structured logs to stdout (pino) for `docker logs`.
 - JSONL files in `LOG_DIR` (default `/app/logs`, a mounted volume):
   - `failures.jsonl` — any pipeline failure, with step + context.
-  - `dropped.jsonl` — unmatched senders.
+  - `dropped.jsonl` — non-whitelisted senders and fallback PDFs that can't be
+    processed (reason field included).
   - `processed.jsonl` — successful runs.
 
 #### Env
@@ -188,13 +210,25 @@ papra:
   apiUrl: "http://papra:1221"
   apiToken: "<papra-api-token>"      # documents:create/read/update, tags:read/create
   organizationId: "<org-id>"
-  defaultOcrLanguages: ["en"]        # used when a rule omits ocrLanguages
+  defaultOcrLanguages: ["en"]        # global OCR default (used unless a rule overrides)
+
+allowedSenders:                      # REQUIRED — only these are processed at all
+  - person1@gmail.com
+  - person2@gmail.com
 
 defaultTagColor: "#6b7280"           # color for auto-created tags (optional override per rule)
 
+fallbackTag: "adhoc-email-ingest"    # optional; tag added to every no-rule document
+
+globalRules:                         # optional; tags applied to EVERY processed email
+  - from: "person1@gmail.com"        #   match envelope from (normalized)
+    tags: ["person1"]
+  - originalTo: "@bank.com"          #   '@...' = domain-suffix match
+    tags: ["bank"]
+
 rules:
-  - from: "statement@hdfcbank.com"
-    to: "papra-ingest@rakeshpai.me"  # optional; matches observed recipient
+  - from: "statement@hdfcbank.com"   # matches the From: header or envelope from
+    to: "papra-ingest@rakeshpai.me"  # optional; matches To: header or envelope to
     password: "abc123"               # optional; omit for plain PDFs
     namePrefix: "HDFC-Statement"     # → HDFC-Statement-2026-09.pdf
     ocrLanguages: ["en"]             # optional; falls back to papra.defaultOcrLanguages
@@ -206,9 +240,14 @@ rules:
 Notes:
 - Config is read once at startup; **reload = container restart**.
 - Passwords are plaintext in the file (accepted trade-off for a homelab).
-- All family members forward to `papra-ingest@rakeshpai.me`, so `to` is usually
-  constant; it is still supported for future per-recipient routing. Rule
-  matching is keyed primarily on `from`.
+- Address matching normalizes addresses (lowercase, Gmail `+`-suffix stripped),
+  so Gmail SRS forwarding aliases like `person1+caf_=…@gmail.com` match
+  `person1@gmail.com`.
+- `globalRules` may match any of `from`/`to`/`originalFrom`/`originalTo`; a rule
+  with multiple fields requires all to match; `@domain.com` values match by
+  domain suffix. Global rules add tags only (never passwords/naming).
+- `allowedSenders` gates **everything** — if an email doesn't match, it is
+  dropped before any rule processing.
 
 ### 4. Papra API token requirements
 
@@ -233,8 +272,10 @@ multipart/form-data:
 
 | Field | Type | Description |
 |---|---|---|
-| `from` | string | sender address |
-| `to` | string | recipient address |
+| `from` | string | envelope sender (`message.from`) |
+| `to` | string | envelope recipient (`message.to`) |
+| `originalFrom` | string (optional) | `From:` header address |
+| `originalTo` | string (optional) | first `To:` header address |
 | `subject` | string | subject |
 | `date` | string | RFC 2822 date header |
 | `messageId` | string | Message-Id header |
