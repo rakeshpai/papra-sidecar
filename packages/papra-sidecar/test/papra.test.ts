@@ -119,17 +119,26 @@ describe('PapraClient', () => {
     expect(firstCall(fetchMock).url).toBe('http://papra:1221/api/organizations/org_1/tags');
   });
 
-  it('createTag posts name and color', async () => {
+  it('createTag posts name and color as JSON', async () => {
     const fetchMock: FetchMock = vi.fn(
       async () => jsonResponse({ tag: { id: 't1', name: 'bank' } }),
     );
     const client = makeClient(fetchMock);
     const tag = await client.createTag('bank', '#6b7280');
     expect(tag.id).toBe('t1');
-    const { init } = firstCall(fetchMock);
-    const form = init.body as FormData;
-    expect(form.get('name')).toBe('bank');
-    expect(form.get('color')).toBe('#6b7280');
+    const { url, init } = firstCall(fetchMock);
+    expect(url).toBe('http://papra:1221/api/organizations/org_1/tags');
+    expect(init.method).toBe('POST');
+    expect(init.headers).toMatchObject({ 'Content-Type': 'application/json' });
+    expect(JSON.parse(init.body as string)).toEqual({ name: 'bank', color: '#6b7280' });
+  });
+
+  it('createTag throws on non-ok response', async () => {
+    const fetchMock: FetchMock = vi.fn(
+      async () => jsonResponse({ error: { message: 'Invalid request body' } }, 400),
+    );
+    const client = makeClient(fetchMock);
+    await expect(client.createTag('bank', '#6b7280')).rejects.toThrow(/400/);
   });
 
   it('addTagToDocument posts tagId', async () => {

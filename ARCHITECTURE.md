@@ -175,9 +175,15 @@ Node 22 + [Hono](https://hono.dev), ESM, TypeScript with strictest settings.
    - fallback: all matching `globalRules` tags ∪ `fallbackTag` (if configured).
    For each tag name —
    - `GET .../tags`, find by name (cache the mapping);
-   - if missing, `POST .../tags` with `{ name, color }` (`tags:create` needed);
-   - `POST .../documents/{id}/tags` with `{ tagId }` (`tags:read` +
+   - if missing, `POST .../tags` with a **JSON** body `{ name, color }`
+     (`tags:create` needed). Papra's create-tag endpoint takes JSON, not
+     multipart/form-data;
+   - `POST .../documents/{id}/tags` with a JSON body `{ tagId }` (`tags:read` +
      `documents:update` needed). Re-adding an existing tag is idempotent.
+   Each tag is resolved/created/attached independently: a failure on one tag is
+   logged at error level with the tag name and does not stop the remaining tags,
+   but the job is still recorded as a failure (never a false `processed` entry)
+   so a document can never end up silently untagged.
 9. **Success**: append a line to `processed.jsonl` with context (messageId,
    from, document id, docling time, tags).
 

@@ -107,13 +107,11 @@ export class PapraClient {
   }
 
   async createTag(name: string, color: string): Promise<PapraTag> {
-    const form = new FormData();
-    form.set('name', name);
-    form.set('color', color);
     const data = await parseJson<{ tag: PapraTag }>(
       await this.request(`/api/organizations/${this.organizationId}/tags`, {
         method: 'POST',
-        body: form,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, color }),
       }),
       'createTag',
     );

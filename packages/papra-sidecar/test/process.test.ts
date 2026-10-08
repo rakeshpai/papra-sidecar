@@ -180,6 +180,72 @@ describe('processJob (specific rule)', () => {
     expect(patchBody.content).toBe('hello\n\nworld');
   });
 
+  it('still applies healthy tags and logs the failed tag when one tag cannot be created', async () => {
+    const logDir = createLogDir();
+    const workDir = createWorkDir('proc');
+    const pdfPath = join(workDir, 'statement.pdf');
+    await writeEncryptedPdf(pdfPath, 'secret');
+
+    const config = baseConfig({ globalRules: [] });
+    config.rules[0]!.tags = ['good-tag', 'bad-tag'];
+
+    const attachedTagIds: string[] = [];
+    const fetchMock: FetchMock = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        const url = String(input);
+        const method = init?.method ?? 'GET';
+        if (url.endsWith('/v1/convert/file')) {
+          return new Response(JSON.stringify({ document: { md_content: 'hello' } }), {
+            status: 200,
+          });
+        }
+        if (url.endsWith('/api/organizations/org_1/documents') && method === 'POST') {
+          return new Response(JSON.stringify({ document: { id: 'doc1', name: 'x.pdf' } }), {
+            status: 201,
+          });
+        }
+        if (url.endsWith('/documents/doc1') && method === 'GET') {
+          return new Response(JSON.stringify({ document: { id: 'doc1', content: 'papra' } }), {
+            status: 200,
+          });
+        }
+        if (url.endsWith('/documents/doc1') && method === 'PATCH') {
+          return new Response(JSON.stringify({ document: { id: 'doc1' } }), { status: 200 });
+        }
+        if (url.endsWith('/api/organizations/org_1/tags') && method === 'GET') {
+          return new Response(JSON.stringify({ tags: [] }), { status: 200 });
+        }
+        if (url.endsWith('/api/organizations/org_1/tags') && method === 'POST') {
+          const { name } = JSON.parse(init?.body as string) as { name: string };
+          if (name === 'bad-tag') {
+            return new Response(JSON.stringify({ error: { message: 'Invalid request body' } }), {
+              status: 400,
+            });
+          }
+          return new Response(JSON.stringify({ tag: { id: `t-${name}`, name } }), { status: 201 });
+        }
+        if (url.endsWith('/documents/doc1/tags') && method === 'POST') {
+          const { tagId } = JSON.parse(init?.body as string) as { tagId: string };
+          attachedTagIds.push(tagId);
+          return new Response(null, { status: 204 });
+        }
+        return new Response(JSON.stringify({ message: 'unexpected' }), { status: 500 });
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await processJob(
+      makeInput({ file: { filename: 'statement.pdf', data: readFileSync(pdfPath) } }),
+      { config, rule: config.rules[0]!, doclingBaseUrl: 'http://docling-serve:5001', logDir },
+    );
+
+    expect(attachedTagIds).toEqual(['t-good-tag']);
+    const failures = readLog(logDir, 'failures.jsonl');
+    expect(failures).toContain('"step":"papra:tags"');
+    expect(failures).toContain('bad-tag');
+    expect(readLog(logDir, 'processed.jsonl')).toBe('');
+  });
+
   it('logs a failure and does not upload when the password is wrong', async () => {
     const logDir = createLogDir();
     const workDir = createWorkDir('proc');

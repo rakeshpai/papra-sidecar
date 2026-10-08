@@ -13,7 +13,7 @@ import {
 import { PapraClient } from './papra.js';
 import { collectGlobalTags, type EmailIdentity } from './rules.js';
 
-export const EXTRACTION_TIMEOUT_MS = 5 * 60 * 1000;
+const EXTRACTION_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_TAG_COLOR = '#6b7280';
 
 export interface JobInput {
@@ -119,13 +119,28 @@ export async function processJob(input: JobInput, ctx: ProcessContext): Promise<
 
     step = 'papra:tags';
     const globalTags = collectGlobalTags(ctx.config, identity);
-    const tags =
-      ctx.rule === null
-        ? [...globalTags, ...(ctx.config.fallbackTag !== undefined ? [ctx.config.fallbackTag] : [])]
-        : [...ctx.rule.tags, ...globalTags];
-    const tagIds = await ensureTags(papra, ctx.config, tags, ctx.rule?.tagColor);
-    for (const tagId of tagIds) {
-      await papra.addTagToDocument(document.id, tagId);
+    const tags = [
+      ...new Set(
+        ctx.rule === null
+          ? [
+              ...globalTags,
+              ...(ctx.config.fallbackTag !== undefined ? [ctx.config.fallbackTag] : []),
+            ]
+          : [...ctx.rule.tags, ...globalTags],
+      ),
+    ];
+    const failedTags = await applyTags({
+      papra,
+      config: ctx.config,
+      tags,
+      ...(ctx.rule?.tagColor !== undefined ? { color: ctx.rule.tagColor } : {}),
+      documentId: document.id,
+      logger,
+    });
+    if (failedTags.length > 0) {
+      throw new Error(
+        `failed to apply ${failedTags.length} of ${tags.length} tag(s): ${failedTags.join(', ')}`,
+      );
     }
 
     logger.processed({
@@ -150,26 +165,56 @@ export async function processJob(input: JobInput, ctx: ProcessContext): Promise<
   }
 }
 
-async function ensureTags(
-  papra: PapraClient,
-  config: SidecarConfig,
-  tags: string[],
-  color?: string,
-): Promise<string[]> {
+interface ApplyTagsOptions {
+  papra: PapraClient;
+  config: SidecarConfig;
+  tags: string[];
+  color?: string;
+  documentId: string;
+  logger: SidecarLogger;
+}
+
+/**
+ * Resolves, creates and attaches each tag independently. A failure on one tag is
+ * logged with the tag name and does not prevent the remaining tags from being
+ * applied; the names of the tags that failed are returned so the caller can fail
+ * the job loudly (instead of silently leaving the document untagged).
+ */
+async function applyTags({
+  papra,
+  config,
+  tags,
+  color,
+  documentId,
+  logger,
+}: ApplyTagsOptions): Promise<string[]> {
   const existing = await papra.listTags();
   const byName = new Map(existing.map((tag) => [tag.name.toLowerCase(), tag]));
-  const tagIds: string[] = [];
+  const failed: string[] = [];
+
   for (const name of tags) {
     const key = name.toLowerCase();
-    const existingTag = byName.get(key);
-    if (existingTag !== undefined) {
-      tagIds.push(existingTag.id);
-      continue;
+    try {
+      let tag = byName.get(key);
+      if (tag === undefined) {
+        const resolvedColor = color ?? config.defaultTagColor ?? DEFAULT_TAG_COLOR;
+        tag = await papra.createTag(name, resolvedColor);
+        byName.set(key, tag);
+      }
+      await papra.addTagToDocument(documentId, tag.id);
+    } catch (error) {
+      failed.push(name);
+      logger.log.error(
+        {
+          step: 'papra:tags',
+          documentId,
+          tag: name,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'tag application failed',
+      );
     }
-    const resolvedColor = color ?? config.defaultTagColor ?? DEFAULT_TAG_COLOR;
-    const created = await papra.createTag(name, resolvedColor);
-    byName.set(key, created);
-    tagIds.push(created.id);
   }
-  return tagIds;
+
+  return failed;
 }

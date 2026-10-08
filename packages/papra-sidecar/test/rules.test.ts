@@ -99,6 +99,21 @@ describe('matchRule', () => {
     ).toBe(config.rules[0]);
   });
 
+  it('matches an uppercase From header against a lowercase rule (INFO@tatapower.com)', () => {
+    const uppercaseConfig: SidecarConfig = {
+      ...config,
+      rules: [
+        { from: 'info@tatapower.com', namePrefix: 'Tata-Power-Bill', tags: ['electricity-bill'] },
+      ],
+    };
+    expect(
+      matchRule(
+        uppercaseConfig,
+        identity({ from: 'person1@gmail.com', originalFrom: 'INFO@TATAPOWER.COM' }),
+      ),
+    ).toBe(uppercaseConfig.rules[0]);
+  });
+
   it('honors the to constraint against the To header', () => {
     expect(
       matchRule(
