@@ -7,7 +7,6 @@ export const papraConfigSchema = z
     apiUrl: nonEmptyString,
     apiToken: nonEmptyString,
     organizationId: nonEmptyString,
-    defaultOcrLanguages: z.array(nonEmptyString).default(['en']),
   })
   .strict();
 
@@ -19,8 +18,6 @@ export const ruleSchema = z
     to: nonEmptyString.optional(),
     password: nonEmptyString.optional(),
     namePrefix: nonEmptyString,
-    ocrLanguages: z.array(nonEmptyString).optional(),
-    forceOcr: z.boolean().optional(),
     tags: z.array(nonEmptyString),
     tagColor: nonEmptyString.optional(),
   })

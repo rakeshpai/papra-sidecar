@@ -7,4 +7,4 @@ The purpose of this app is to read email attachments and upload them to papra.
 
 This repo consists of two packages.
 1. One is a Cloudflare email worker that receives emails with attachments and posts it via a webhook to an internally running docker container.
-2. The second is a TypeScript Node.js app packaged as a docker container that receives the email and its attachment via the webook POST, decrypts the attachment using the provided password via a config if necessary, parses the attachment using docling, and uploads the decrypted attachment with parsed content to papra. It also adds tags to the papra document based on config rules.
+2. The second is a TypeScript Node.js app packaged as a docker container that receives the email and its attachment via the webook POST, decrypts the attachment using the provided password via a config if necessary, and uploads the decrypted attachment to papra (which performs its own OCR/content extraction). It also adds tags to the papra document based on config rules.

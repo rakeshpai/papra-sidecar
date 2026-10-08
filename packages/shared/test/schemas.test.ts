@@ -83,8 +83,6 @@ describe('ruleSchema', () => {
       to: 'papra-ingest@rakeshpai.me',
       password: 'abc123',
       namePrefix: 'Bank-Statement',
-      ocrLanguages: ['en'],
-      forceOcr: false,
       tags: ['bank', 'hdfc'],
       tagColor: '#e11d48',
     });
@@ -126,19 +124,6 @@ describe('globalRuleSchema', () => {
 });
 
 describe('sidecarConfigSchema', () => {
-  it('defaults ocrLanguages to en', () => {
-    const config = sidecarConfigSchema.parse({
-      papra: {
-        apiUrl: 'http://papra:1221',
-        apiToken: 'token',
-        organizationId: 'org_1',
-      },
-      allowedSenders: ['person1@gmail.com'],
-      rules: [],
-    });
-    expect(config.papra.defaultOcrLanguages).toEqual(['en']);
-  });
-
   it('requires allowedSenders', () => {
     const result = sidecarConfigSchema.safeParse({
       papra: { apiUrl: 'http://papra:1221', apiToken: 't', organizationId: 'o' },

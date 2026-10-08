@@ -25,18 +25,16 @@ papra-ingest@rakeshpai.me
 │  • per-sender rule match (drop+log unknown) │
 │  • qpdf decrypt (per-sender password)       │
 │  • name → {prefix}-{YYYY-MM}.pdf            │
-│  • docling-serve parse (OCR language cfg)   │
-│  • upload to Papra, wait, PATCH content     │
-│  • auto-create & apply tags                 │
+│  • upload to Papra, auto-create & apply tags│
 └────────────────────┬────────────────────────┘
                      ▼  home-docker-network
-            papra  (http://papra:1221)   ·   docling-serve  (http://docling-serve:5001)
+            papra  (http://papra:1221)
 ```
 
-**Why this exists:** Papra's built-in content extraction calls docling without
-any OCR language, so docling defaults to Chinese. This sidecar parses with
-docling itself, letting each sender configure OCR languages. (Verified in
-Papra's source: the `ocrLanguages` field never reaches the docling strategy.)
+**Why this exists:** the sidecar decrypts password-protected PDFs, gives them a
+stable name, and applies sender-based tags on the way into Papra. Papra handles
+OCR/content extraction itself; configure the OCR language on Papra with the
+`DOCLING_OPTIONS` environment variable (e.g. `{"ocr_lang":["en"]}`).
 
 ## Repository layout
 
@@ -60,7 +58,7 @@ pnpm install
 pnpm build          # compiles shared + sidecar
 pnpm typecheck
 pnpm lint
-pnpm test           # 61 tests
+pnpm test           # 87 tests
 ```
 
 Run the sidecar locally:
@@ -98,7 +96,6 @@ docker build -f packages/papra-sidecar/Dockerfile -t papra-sidecar:test .
 | Env `WEBHOOK_SECRET` | (required) shared secret the worker sends as a Bearer token |
 | Env `SIDECAR_CONFIG` | config file path, default `/app/config.yaml` |
 | Env `LOG_DIR` | JSONL log dir, default `/app/logs` |
-| Env `DOCLING_BASE_URL` | default `http://docling-serve:5001` |
 | Env `PORT` | default `3000` |
 | Mount `/app/config.yaml` | read-only config (restart to reload) |
 | Mount `/app/logs` | `failures.jsonl`, `dropped.jsonl`, `processed.jsonl` |
@@ -122,9 +119,8 @@ Full schema (strictly validated):
 ```yaml
 papra:
   apiUrl: "http://papra:1221"          # Papra service on the docker network
-  apiToken: "papra-api-token"           # needs documents:create/read/update, tags:read/create
+  apiToken: "papra-api-token"           # needs documents:create/update, tags:read/create
   organizationId: "org_xxx"             # Papra organization id
-  defaultOcrLanguages: ["en"]           # global OCR language (fallback)
 
 allowedSenders:                         # REQUIRED — only these are processed at all
   - person1@gmail.com                   # Gmail +-suffix (SRS) aliases match automatically
@@ -147,8 +143,6 @@ rules:
     to: "papra-ingest@rakeshpai.me"      # optional constraint on recipient
     password: "abc123"                   # decryption password (omit for plain PDFs)
     namePrefix: "HDFC-Statement"         # document name → HDFC-Statement-2026-09.pdf
-    ocrLanguages: ["en"]                 # optional; falls back to defaultOcrLanguages
-    forceOcr: false                      # optional; passed to docling
     tags: ["bank", "hdfc"]               # auto-created in Papra if missing
     tagColor: "#e11d48"                  # optional per-rule color override
 ```
@@ -164,8 +158,8 @@ Notes:
   `person1+caf_=…@gmail.com` match `person1@gmail.com`.
 - **Fallback**: emails from a whitelisted sender with no matching rule are still
   processed **if the PDF is unencrypted** (encrypted ones are dropped and logged).
-  They are named from the subject (`{sanitizedSubject}-{YYYY-MM}.pdf`), use the
-  global `defaultOcrLanguages`, and get the `fallbackTag` if configured.
+  They are named from the subject (`{sanitizedSubject}-{YYYY-MM}.pdf`) and get the
+  `fallbackTag` if configured.
 - A wrong password on a specific rule is logged to `failures.jsonl` (no retry).
 - If a rule has a password but the PDF is actually unencrypted, it is still
   processed (plain-copy fallback).
@@ -285,13 +279,13 @@ Steps:
 
 1. Send a real password-protected PDF from a configured sender to
    `papra-ingest@rakeshpai.me`.
-2. In Papra, expect a document `{namePrefix}-{YYYY-MM}.pdf` with English docling
-   content and the configured tags.
+2. In Papra, expect a document `{namePrefix}-{YYYY-MM}.pdf` with content extracted
+   by Papra and the configured tags.
 3. Inspect logs:
    - `docker/papra-sidecar/logs/processed.jsonl` — success lines
    - `docker/papra-sidecar/logs/dropped.jsonl` — non-whitelisted senders and
      fallback PDFs that couldn't be processed (reason included)
-   - `docker/papra-sidecar/logs/failures.jsonl` — decrypt / docling / Papra errors
+   - `docker/papra-sidecar/logs/failures.jsonl` — decrypt / Papra errors
 4. Re-send the same statement → Papra's dedup should avoid a duplicate.
 
 ## Troubleshooting
@@ -300,11 +294,10 @@ Steps:
   `WEBHOOK_SECRET` must match.
 - **Emails not arriving** — check the Email Routing rule and `wrangler tail`
   in `packages/worker`.
-- **`step: docling` failures** — the sidecar can't reach
-  `http://docling-serve:5001`; make sure `docling-serve` is up on the same
-  docker network.
 - **`step: papra:*` failures** — check the Papra API token permissions and that
   `papra.apiUrl` is reachable from the sidecar container.
+- **Papra extracts content in the wrong language** — set `DOCLING_OPTIONS` on the
+  Papra service (e.g. `{"ocr_lang":["en"]}`); the sidecar no longer performs OCR.
 
 ## Out of scope (future)
 

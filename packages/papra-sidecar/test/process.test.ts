@@ -44,7 +44,6 @@ function baseConfig(overrides: Partial<SidecarConfig> = {}): SidecarConfig {
       apiUrl: 'http://papra:1221',
       apiToken: 'token',
       organizationId: 'org_1',
-      defaultOcrLanguages: ['en'],
     },
     allowedSenders: ['statement@bank.com', 'person1@gmail.com'],
     globalRules: [
@@ -81,7 +80,7 @@ type FetchMock = ReturnType<
   typeof vi.fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>
 >;
 
-function stubPapraAndDocling(): { calls: string[]; fetchMock: FetchMock } {
+function stubPapra(): { calls: string[]; fetchMock: FetchMock } {
   const calls: string[] = [];
   const fetchMock: FetchMock = vi.fn(
     async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -89,28 +88,10 @@ function stubPapraAndDocling(): { calls: string[]; fetchMock: FetchMock } {
       const method = init?.method ?? 'GET';
       calls.push(`${method} ${url}`);
 
-      if (url.endsWith('/v1/convert/file')) {
-        return new Response(
-          JSON.stringify({ document: { md_content: 'hello\n<!-- image -->\nworld' } }),
-          { status: 200 },
-        );
-      }
       if (url.endsWith('/api/organizations/org_1/documents') && method === 'POST') {
         return new Response(JSON.stringify({ document: { id: 'doc1', name: 'x.pdf' } }), {
           status: 201,
         });
-      }
-      if (url.endsWith('/documents/doc1') && method === 'GET') {
-        return new Response(
-          JSON.stringify({ document: { id: 'doc1', name: 'x.pdf', content: 'papra' } }),
-          { status: 200 },
-        );
-      }
-      if (url.endsWith('/documents/doc1') && method === 'PATCH') {
-        return new Response(
-          JSON.stringify({ document: { id: 'doc1', name: 'x.pdf', content: 'markdown' } }),
-          { status: 200 },
-        );
       }
       if (url.endsWith('/api/organizations/org_1/tags') && method === 'GET') {
         return new Response(JSON.stringify({ tags: [{ id: 't1', name: 'bank' }] }), {
@@ -145,20 +126,19 @@ function createLogDir(): string {
 }
 
 describe('processJob (specific rule)', () => {
-  it('decrypts, parses, uploads, patches, and tags end-to-end', async () => {
+  it('decrypts, uploads, and tags end-to-end', async () => {
     const logDir = createLogDir();
     const workDir = createWorkDir('proc');
     const pdfPath = join(workDir, 'statement.pdf');
     await writeEncryptedPdf(pdfPath, 'secret');
 
     const config = baseConfig();
-    const { calls, fetchMock } = stubPapraAndDocling();
+    const { calls } = stubPapra();
 
     const input = makeInput({ file: { filename: 'statement.pdf', data: readFileSync(pdfPath) } });
     await processJob(input, {
       config,
       rule: config.rules[0]!,
-      doclingBaseUrl: 'http://docling-serve:5001',
       logDir,
     });
 
@@ -168,16 +148,9 @@ describe('processJob (specific rule)', () => {
     expect(processed).toContain('"documentName":"Bank-2026-09.pdf"');
     expect(processed).toContain('"tags":["hdfc","person1","bank"]');
 
-    expect(calls).toContain('POST http://docling-serve:5001/v1/convert/file');
     expect(calls).toContain('POST http://papra:1221/api/organizations/org_1/documents');
-    expect(calls).toContain('PATCH http://papra:1221/api/organizations/org_1/documents/doc1');
     expect(calls).toContain('GET http://papra:1221/api/organizations/org_1/tags');
     expect(calls).toContain('POST http://papra:1221/api/organizations/org_1/documents/doc1/tags');
-
-    const patchInit = fetchMock.mock.calls.find((c) => c[1]?.method === 'PATCH')?.[1];
-    const patchBody = JSON.parse(patchInit?.body as string) as { name: string; content: string };
-    expect(patchBody.name).toBe('Bank-2026-09.pdf');
-    expect(patchBody.content).toBe('hello\n\nworld');
   });
 
   it('still applies healthy tags and logs the failed tag when one tag cannot be created', async () => {
@@ -194,23 +167,10 @@ describe('processJob (specific rule)', () => {
       async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
         const url = String(input);
         const method = init?.method ?? 'GET';
-        if (url.endsWith('/v1/convert/file')) {
-          return new Response(JSON.stringify({ document: { md_content: 'hello' } }), {
-            status: 200,
-          });
-        }
         if (url.endsWith('/api/organizations/org_1/documents') && method === 'POST') {
           return new Response(JSON.stringify({ document: { id: 'doc1', name: 'x.pdf' } }), {
             status: 201,
           });
-        }
-        if (url.endsWith('/documents/doc1') && method === 'GET') {
-          return new Response(JSON.stringify({ document: { id: 'doc1', content: 'papra' } }), {
-            status: 200,
-          });
-        }
-        if (url.endsWith('/documents/doc1') && method === 'PATCH') {
-          return new Response(JSON.stringify({ document: { id: 'doc1' } }), { status: 200 });
         }
         if (url.endsWith('/api/organizations/org_1/tags') && method === 'GET') {
           return new Response(JSON.stringify({ tags: [] }), { status: 200 });
@@ -236,7 +196,7 @@ describe('processJob (specific rule)', () => {
 
     await processJob(
       makeInput({ file: { filename: 'statement.pdf', data: readFileSync(pdfPath) } }),
-      { config, rule: config.rules[0]!, doclingBaseUrl: 'http://docling-serve:5001', logDir },
+      { config, rule: config.rules[0]!, logDir },
     );
 
     expect(attachedTagIds).toEqual(['t-good-tag']);
@@ -254,11 +214,11 @@ describe('processJob (specific rule)', () => {
 
     const config = baseConfig();
     const rule: Rule = { ...config.rules[0]!, password: 'wrong' };
-    const { fetchMock } = stubPapraAndDocling();
+    const { fetchMock } = stubPapra();
 
     await processJob(
       makeInput({ file: { filename: 'statement.pdf', data: readFileSync(pdfPath) } }),
-      { config, rule, doclingBaseUrl: 'http://docling-serve:5001', logDir },
+      { config, rule, logDir },
     );
 
     const failures = readLog(logDir, 'failures.jsonl');
@@ -276,7 +236,7 @@ describe('processJob (fallback)', () => {
     await writePlainPdf(pdfPath);
 
     const config = baseConfig({ fallbackTag: 'adhoc-email-ingest' });
-    const { calls } = stubPapraAndDocling();
+    stubPapra();
 
     await processJob(
       makeInput({
@@ -285,17 +245,13 @@ describe('processJob (fallback)', () => {
         subject: 'Your receipt 1234',
         file: { filename: 'statement.pdf', data: readFileSync(pdfPath) },
       }),
-      { config, rule: null, doclingBaseUrl: 'http://docling-serve:5001', logDir },
+      { config, rule: null, logDir },
     );
 
     const processed = readLog(logDir, 'processed.jsonl');
     expect(processed).toContain('"level":"processed"');
     expect(processed).toContain('"documentName":"Your receipt 1234-2026-09.pdf"');
-    expect(processed).toContain('"ocrLanguages":["en"]');
     expect(processed).toContain('"tags":["person1","adhoc-email-ingest"]');
-
-    const patchInit = calls.find((c) => c.startsWith('PATCH'));
-    expect(patchInit).toBeTruthy();
   });
 
   it('does not add fallbackTag when it is not configured', async () => {
@@ -305,7 +261,7 @@ describe('processJob (fallback)', () => {
     await writePlainPdf(pdfPath);
 
     const config = baseConfig();
-    stubPapraAndDocling();
+    stubPapra();
 
     await processJob(
       makeInput({
@@ -313,7 +269,7 @@ describe('processJob (fallback)', () => {
         originalFrom: 'somecompany@other.com',
         file: { filename: 'statement.pdf', data: readFileSync(pdfPath) },
       }),
-      { config, rule: null, doclingBaseUrl: 'http://docling-serve:5001', logDir },
+      { config, rule: null, logDir },
     );
 
     const processed = readLog(logDir, 'processed.jsonl');
@@ -327,7 +283,7 @@ describe('processJob (fallback)', () => {
     await writeEncryptedPdf(pdfPath, 'secret');
 
     const config = baseConfig();
-    const { fetchMock } = stubPapraAndDocling();
+    const { fetchMock } = stubPapra();
 
     await processJob(
       makeInput({
@@ -335,7 +291,7 @@ describe('processJob (fallback)', () => {
         originalFrom: 'somecompany@other.com',
         file: { filename: 'statement.pdf', data: readFileSync(pdfPath) },
       }),
-      { config, rule: null, doclingBaseUrl: 'http://docling-serve:5001', logDir },
+      { config, rule: null, logDir },
     );
 
     const dropped = readLog(logDir, 'dropped.jsonl');

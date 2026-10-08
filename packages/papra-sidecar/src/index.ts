@@ -33,7 +33,6 @@ export function buildApp(deps: AppDeps): Hono {
       processJob(job.input, {
         config,
         rule: job.rule,
-        doclingBaseUrl: env.DOCLING_BASE_URL,
         logDir: env.LOG_DIR,
       }));
 

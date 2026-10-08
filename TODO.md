@@ -50,15 +50,14 @@ Legend: 🔧 = code, 🧪 = test, 📦 = packaging, 🚀 = deploy, 📋 = manual
 - [x] 3.6 `src/queue.ts` — in-memory FIFO, concurrency 1.
 - [x] 3.7 `src/decrypt.ts` — qpdf wrapper with plain/fallback handling. 🧪 tested.
 - [x] 3.8 `src/name.ts` — `{prefix}-{YYYY-MM}.pdf` naming. 🧪 tested.
-- [x] 3.9 `src/docling.ts` — docling-serve client (`ocr_lang` etc.). 🧪 tested.
-- [x] 3.10 `src/papra.ts` — Papra API client (upload/poll/patch/tags). 🧪 tested.
-- [x] 3.11 `src/process.ts` — job pipeline. 🧪 tested end-to-end (real qpdf,
-      mocked docling/papra).
-- [x] 3.12 `src/index.ts` + `src/main.ts` — Hono app (auth, 202, healthz). 🧪 tested.
-- [x] 3.13 `Dockerfile` — multi-stage, `node:22-bookworm-slim` + qpdf.
-- [x] 3.14 `.dockerignore` at repo root.
-- [x] 3.15 🔧 Runtime layout validated locally (prod-only install + boot + healthz).
-- [x] 3.16 Verify `pnpm typecheck` + `pnpm test` + `pnpm build`.
+- [x] 3.9 `src/papra.ts` — Papra API client (upload/tags). 🧪 tested.
+- [x] 3.10 `src/process.ts` — job pipeline. 🧪 tested end-to-end (real qpdf,
+      mocked papra).
+- [x] 3.11 `src/index.ts` + `src/main.ts` — Hono app (auth, 202, healthz). 🧪 tested.
+- [x] 3.12 `Dockerfile` — multi-stage, `node:22-bookworm-slim` + qpdf.
+- [x] 3.13 `.dockerignore` at repo root.
+- [x] 3.14 🔧 Runtime layout validated locally (prod-only install + boot + healthz).
+- [x] 3.15 Verify `pnpm typecheck` + `pnpm test` + `pnpm build`.
 
 ## Phase 4 — CI
 
@@ -97,7 +96,7 @@ Legend: 🔧 = code, 🧪 = test, 📦 = packaging, 🚀 = deploy, 📋 = manual
 - [ ] 7.2 `docker compose pull` + `up -d papra-sidecar`, confirm healthcheck green.
 - [ ] 7.3 Send a real password-protected PDF from a configured sender to
       `papra-ingest@rakeshpai.me`.
-- [ ] 7.4 Confirm in Papra: `{prefix}-{YYYY-MM}.pdf`, English docling content, tags.
+- [ ] 7.4 Confirm in Papra: `{prefix}-{YYYY-MM}.pdf`, content extracted by Papra, tags.
 - [ ] 7.5 Confirm `processed.jsonl` / `dropped.jsonl` / `failures.jsonl` lines.
 - [ ] 7.6 Re-send the same statement → confirm Papra dedup avoids a duplicate.
 

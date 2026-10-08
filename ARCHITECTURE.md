@@ -5,16 +5,13 @@
 `papra-sidecar` is a bespoke ingestion pipeline for a home-lab
 [Papra](https://papra.app) installation. It receives emails that contain
 PDF attachments (bank/credit-card/mutual-fund statements), decrypts them with a
-per-sender password, extracts text with configurable OCR language via
-docling, and uploads the decrypted PDF + parsed content to Papra, tagging it
-according to per-sender rules.
+per-sender password, renames them to a stable document name, uploads the
+decrypted PDF to Papra, and tags it according to per-sender rules.
 
-It exists because Papra's own content extraction calls docling **without any
-OCR language configuration** (docling then defaults to Chinese). Verified in
-Papra's source: `content-extraction-strategies/docling/docling.content-extraction-strategy.ts`
-only passes the file; the `ocrLanguages` field on document creation only flows
-to the internal tesseract ("lecture") strategy, never to docling. This sidecar
-parses with docling itself so OCR language is fully under our control.
+Papra performs content extraction / OCR itself (its `docling` content-extraction
+strategy). Configure the OCR language on the **Papra** service with the
+`DOCLING_OPTIONS` environment variable (e.g.
+`DOCLING_OPTIONS='{"ocr_lang":["en"]}'`). The sidecar no longer talks to docling.
 
 ## High-level data flow
 
@@ -44,11 +41,8 @@ Family member's Gmail ──forward──▶ papra-ingest@rakeshpai.me
                    ▼
    1. decrypt PDF with rule password (qpdf)
    2. rename → {namePrefix}-{YYYY-MM}.pdf
-   3. docling-serve /v1/convert/file (ocr_lang from rule)
-   4. upload decrypted PDF to Papra API
-   5. wait for Papra's own extraction to finish
-   6. PATCH Papra document content = our docling markdown
-   7. ensure/create tags, attach them to the document
+   3. upload decrypted PDF to Papra API (filename becomes the document name)
+   4. ensure/create tags, attach them to the document
 ```
 
 ### Runtime dependencies (already running in home-server-setup compose)
@@ -56,7 +50,6 @@ Family member's Gmail ──forward──▶ papra-ingest@rakeshpai.me
 | Service | Address on network | Notes |
 |---|---|---|
 | `papra` | `http://papra:1221` | `ghcr.io/papra-hq/papra:latest`, API uses Bearer token |
-| `docling-serve` | `http://docling-serve:5001` | `quay.io/docling-project/docling-serve-cpu:latest`, `/v1/convert/file` |
 
 The sidecar has no other outbound dependencies. It does **not** expose ports to
 the host; it is reached through the existing `cloudflared` tunnel ingress
@@ -122,7 +115,7 @@ Node 22 + [Hono](https://hono.dev), ESM, TypeScript with strictest settings.
 5. Match a specific `rules` entry: `rule.from` matches `originalFrom` **or**
    `from`; optional `rule.to` matches `originalTo` **or** `to`; first match wins.
    - If found → enqueue a **specific-rule job** (uses rule password, namePrefix,
-     ocrLanguages, tags).
+     tags).
    - If not found → enqueue a **fallback job** (see pipeline below).
 6. Enqueue on the in-memory FIFO queue (concurrency 1) and return `202`.
 
@@ -136,11 +129,6 @@ Node 22 + [Hono](https://hono.dev), ESM, TypeScript with strictest settings.
    - Fallback (no rule): `qpdf --decrypt` without a password succeeds only for
      **unencrypted** PDFs. Encrypted → drop + log to `dropped.jsonl` with
      `reason: "encrypted pdf with no matching rule"`. Unencrypted → copy as-is.
-   - `qpdf --decrypt --password=<pw> <in> <out>`;
-   - on failure, retry `qpdf --decrypt <in> <out>` (in case the sender sent an
-     unencrypted PDF) — if that succeeds, log a warning and proceed;
-   - if both fail → failure log (`invalid password / corrupt PDF`) and stop.
-   - No password in rule → use the PDF as-is.
 3. **Name**:
    - Specific rule: `{namePrefix}-{YYYY-MM}.pdf`.
    - Fallback: `{sanitizedSubject}-{YYYY-MM}.pdf` (subject sanitized for
@@ -148,29 +136,13 @@ Node 22 + [Hono](https://hono.dev), ESM, TypeScript with strictest settings.
    - `YYYY-MM` derives from the email `date` header (fallback to current time).
    - This becomes the Papra document name (Papra names documents from the uploaded
      filename).
-4. **Parse with docling**:
-   - `POST {DOCLING_BASE_URL}/v1/convert/file` (multipart):
-     - `files` = decrypted PDF,
-     - `to_formats` = `md`,
-     - `image_export_mode` = `placeholder`,
-     - `ocr_lang` = each configured language (repeatable); specific rules may
-       override, otherwise `papra.defaultOcrLanguages` (defaults to `["en"]`),
-     - `force_ocr` = rule `forceOcr` (default `false`).
-   - Response: `{ document: { md_content } }`. Strip `<!-- image -->`
-     placeholders (same as Papra does).
-   - Non-2xx / failure → failure log and stop.
-5. **Upload to Papra**:
+4. **Upload to Papra**:
    - `POST {apiUrl}/api/organizations/{organizationId}/documents` (multipart),
      `Authorization: Bearer {apiToken}`, field `file` = the renamed decrypted
      PDF.
-   - Returns the created (or, via Papra dedup, existing) document.
-6. **Wait for Papra's own extraction**: `GET .../documents/{id}` until
-   `document.content` is non-empty or a timeout elapses (default 5 min). This
-   guarantees our PATCH below is the final word, so Papra's Chinese-default
-   docling extraction cannot overwrite our English content afterwards.
-7. **Patch content**: `PATCH .../documents/{id}` with `content` = our docling
-   markdown (and `name` = the chosen name, belt-and-suspenders).
-8. **Tags**: the tag set is —
+   - Returns the created (or, via Papra dedup, existing) document. Papra enqueues
+     its own content extraction (OCR) asynchronously.
+5. **Tags**: the tag set is —
    - specific rule: `rule.tags` ∪ all matching `globalRules` tags;
    - fallback: all matching `globalRules` tags ∪ `fallbackTag` (if configured).
    For each tag name —
@@ -184,8 +156,12 @@ Node 22 + [Hono](https://hono.dev), ESM, TypeScript with strictest settings.
    logged at error level with the tag name and does not stop the remaining tags,
    but the job is still recorded as a failure (never a false `processed` entry)
    so a document can never end up silently untagged.
-9. **Success**: append a line to `processed.jsonl` with context (messageId,
-   from, document id, docling time, tags).
+6. **Success**: append a line to `processed.jsonl` with context (messageId,
+   from, document id, tags).
+
+> Papra's public API does not support attaching tags at document-creation time,
+> so upload and tag attachment remain separate HTTP requests. The sidecar does
+> not poll for extraction or PATCH content — Papra owns content extraction.
 
 #### Logging
 
@@ -203,7 +179,6 @@ Node 22 + [Hono](https://hono.dev), ESM, TypeScript with strictest settings.
 | `WEBHOOK_SECRET` | — (required) | Bearer secret for the webhook |
 | `SIDECAR_CONFIG` | `/app/config.yaml` | Config file path |
 | `LOG_DIR` | `/app/logs` | JSONL log directory |
-| `DOCLING_BASE_URL` | `http://docling-serve:5001` | docling-serve endpoint |
 | `PORT` | `3000` | HTTP listen port |
 
 Papra connection details live in the config YAML (not env), so multiple
@@ -214,9 +189,8 @@ senders/rules can share one config file.
 ```yaml
 papra:
   apiUrl: "http://papra:1221"
-  apiToken: "<papra-api-token>"      # documents:create/read/update, tags:read/create
+  apiToken: "<papra-api-token>"      # documents:create/update, tags:read/create
   organizationId: "<org-id>"
-  defaultOcrLanguages: ["en"]        # global OCR default (used unless a rule overrides)
 
 allowedSenders:                      # REQUIRED — only these are processed at all
   - person1@gmail.com
@@ -237,8 +211,6 @@ rules:
     to: "papra-ingest@rakeshpai.me"  # optional; matches To: header or envelope to
     password: "abc123"               # optional; omit for plain PDFs
     namePrefix: "HDFC-Statement"     # → HDFC-Statement-2026-09.pdf
-    ocrLanguages: ["en"]             # optional; falls back to papra.defaultOcrLanguages
-    forceOcr: false                  # optional; passed to docling
     tags: ["bank", "hdfc"]
     tagColor: "#e11d48"              # optional; overrides defaultTagColor for auto-created tags
 ```
@@ -260,17 +232,16 @@ Notes:
 | Permission | Used for |
 |---|---|
 | `documents:create` | upload |
-| `documents:read` | poll until extraction done |
-| `documents:update` | PATCH content/name |
+| `documents:update` | attach tags |
 | `tags:read` | resolve tag names → ids |
 | `tags:create` | auto-create missing tags |
 
-### 5. docling-serve
+### 5. Papra content extraction (OCR)
 
-No changes required. The sidecar talks to the existing
-`quay.io/docling-project/docling-serve-cpu:latest` container. The `ocr_lang`
-parameter uses BCP-47 tags (`en`, `hi-IN`, …). The service canonicalizes them,
-so `en` → English.
+No sidecar involvement. Papra's own `CONTENT_EXTRACTION_STRATEGY` /
+`DOCLING_OPTIONS` configuration controls how uploaded PDFs are parsed and OCR'd.
+Set the OCR language there (for example `DOCLING_OPTIONS='{"ocr_lang":["en"]}'`)
+so extraction does not fall back to docling's default language.
 
 ## Webhook payload (shared schema, `packages/shared`)
 

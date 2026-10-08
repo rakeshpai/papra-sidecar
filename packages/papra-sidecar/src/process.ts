@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Rule, SidecarConfig } from '@papra-sidecar/shared';
 import { decryptPdf, isPdfUnencrypted } from './decrypt.js';
-import { extractMarkdown } from './docling.js';
 import { SidecarLogger } from './logger.js';
 import {
   buildDocumentName,
@@ -13,7 +12,6 @@ import {
 import { PapraClient } from './papra.js';
 import { collectGlobalTags, type EmailIdentity } from './rules.js';
 
-const EXTRACTION_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_TAG_COLOR = '#6b7280';
 
 export interface JobInput {
@@ -30,7 +28,6 @@ export interface JobInput {
 export interface ProcessContext {
   config: SidecarConfig;
   rule: Rule | null;
-  doclingBaseUrl: string;
   logDir: string;
 }
 
@@ -59,7 +56,13 @@ export async function processJob(input: JobInput, ctx: ProcessContext): Promise<
     const inputPath = join(tempDir, 'input.pdf');
     writeFileSync(inputPath, input.file.data);
 
-    const decryptedPath = join(tempDir, 'decrypted.pdf');
+    const emailDate = parseEmailDate(input.date);
+    const documentName =
+      ctx.rule === null
+        ? buildDocumentNameFromSubject(input.subject, emailDate)
+        : buildDocumentName(ctx.rule.namePrefix, emailDate);
+    const namedPath = join(tempDir, documentName);
+
     if (ctx.rule === null) {
       if (!isPdfUnencrypted(inputPath)) {
         logger.dropped({
@@ -73,35 +76,14 @@ export async function processJob(input: JobInput, ctx: ProcessContext): Promise<
         });
         return;
       }
-      copyFileSync(inputPath, decryptedPath);
+      copyFileSync(inputPath, namedPath);
     } else {
-      const decryptResult = decryptPdf(inputPath, decryptedPath, ctx.rule.password);
+      const decryptResult = decryptPdf(inputPath, namedPath, ctx.rule.password);
       if (decryptResult.kind === 'failed') {
         logger.failure({ ...failureBase, step, error: decryptResult.reason });
         return;
       }
     }
-
-    step = 'docling';
-    const emailDate = parseEmailDate(input.date);
-    const documentName =
-      ctx.rule === null
-        ? buildDocumentNameFromSubject(input.subject, emailDate)
-        : buildDocumentName(ctx.rule.namePrefix, emailDate);
-    const namedPath = join(tempDir, documentName);
-    copyFileSync(decryptedPath, namedPath);
-
-    const ocrLanguages =
-      ctx.rule !== null && ctx.rule.ocrLanguages !== undefined
-        ? ctx.rule.ocrLanguages
-        : ctx.config.papra.defaultOcrLanguages;
-    const forceOcr = ctx.rule?.forceOcr ?? false;
-
-    const markdown = await extractMarkdown(namedPath, {
-      baseUrl: ctx.doclingBaseUrl,
-      ocrLanguages,
-      forceOcr,
-    });
 
     step = 'papra:create';
     const papra = new PapraClient(
@@ -110,12 +92,6 @@ export async function processJob(input: JobInput, ctx: ProcessContext): Promise<
       ctx.config.papra.apiUrl,
     );
     const document = await papra.createDocument(namedPath);
-
-    step = 'papra:wait-extraction';
-    await papra.waitForExtraction(document.id, EXTRACTION_TIMEOUT_MS);
-
-    step = 'papra:patch';
-    await papra.patchDocument(document.id, { name: documentName, content: markdown });
 
     step = 'papra:tags';
     const globalTags = collectGlobalTags(ctx.config, identity);
@@ -151,7 +127,6 @@ export async function processJob(input: JobInput, ctx: ProcessContext): Promise<
       to: input.to,
       documentId: document.id,
       documentName,
-      ocrLanguages,
       tags,
     });
   } catch (error) {

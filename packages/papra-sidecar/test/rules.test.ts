@@ -14,7 +14,6 @@ const config: SidecarConfig = {
     apiUrl: 'http://papra:1221',
     apiToken: 't',
     organizationId: 'o',
-    defaultOcrLanguages: ['en'],
   },
   allowedSenders: ['person1@gmail.com', 'person2@gmail.com'],
   rules: [

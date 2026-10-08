@@ -22,7 +22,7 @@ function writeConfig(yaml: string): string {
 }
 
 describe('loadConfig', () => {
-  it('parses a valid config and defaults ocrLanguages', () => {
+  it('parses a valid config', () => {
     const path = writeConfig(`
 papra:
   apiUrl: http://papra:1221
@@ -36,7 +36,6 @@ rules:
 `);
     const config = loadConfig(path);
     expect(config.papra.apiUrl).toBe('http://papra:1221');
-    expect(config.papra.defaultOcrLanguages).toEqual(['en']);
     expect(config.rules[0]?.namePrefix).toBe('Bank');
     expect(config.rules[0]?.password).toBeUndefined();
   });
@@ -47,7 +46,6 @@ papra:
   apiUrl: http://papra:1221
   apiToken: token
   organizationId: org_1
-  defaultOcrLanguages: [en, hi]
 allowedSenders: [person1@gmail.com]
 defaultTagColor: '#e11d48'
 rules:
@@ -55,8 +53,6 @@ rules:
     to: papra-ingest@rakeshpai.me
     password: abc123
     namePrefix: Bank
-    ocrLanguages: [en]
-    forceOcr: true
     tags: [bank, hdfc]
     tagColor: '#123456'
 `);
@@ -64,8 +60,6 @@ rules:
     const rule = config.rules[0];
     expect(rule?.to).toBe('papra-ingest@rakeshpai.me');
     expect(rule?.password).toBe('abc123');
-    expect(rule?.forceOcr).toBe(true);
-    expect(rule?.ocrLanguages).toEqual(['en']);
     expect(rule?.tags).toEqual(['bank', 'hdfc']);
     expect(config.defaultTagColor).toBe('#e11d48');
   });

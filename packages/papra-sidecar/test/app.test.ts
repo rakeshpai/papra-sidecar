@@ -23,7 +23,6 @@ function setup(): { env: AppEnv; config: SidecarConfig; logDir: string } {
     WEBHOOK_SECRET: 'super-secret',
     SIDECAR_CONFIG: '/tmp/nope.yaml',
     LOG_DIR: logDir,
-    DOCLING_BASE_URL: 'http://docling-serve:5001',
     PORT: 3000,
   };
   const config: SidecarConfig = {
@@ -31,7 +30,6 @@ function setup(): { env: AppEnv; config: SidecarConfig; logDir: string } {
       apiUrl: 'http://papra:1221',
       apiToken: 't',
       organizationId: 'o',
-      defaultOcrLanguages: ['en'],
     },
     allowedSenders: ['statement@bank.com'],
     rules: [{ from: 'statement@bank.com', namePrefix: 'Bank', tags: ['bank'] }],
@@ -144,7 +142,6 @@ describe('webhook app', () => {
         apiUrl: 'http://papra:1221',
         apiToken: 't',
         organizationId: 'o',
-        defaultOcrLanguages: ['en'],
       },
       allowedSenders: ['person1@gmail.com'],
       fallbackTag: 'adhoc-email-ingest',

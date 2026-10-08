@@ -4,7 +4,6 @@ import { basename } from 'node:path';
 export interface PapraDocument {
   id: string;
   name?: string;
-  content?: string;
   [key: string]: unknown;
 }
 
@@ -59,45 +58,6 @@ export class PapraClient {
     return data.document;
   }
 
-  async getDocument(documentId: string): Promise<PapraDocument> {
-    const data = await parseJson<{ document: PapraDocument }>(
-      await this.request(`/api/organizations/${this.organizationId}/documents/${documentId}`),
-      'getDocument',
-    );
-    return data.document;
-  }
-
-  async waitForExtraction(
-    documentId: string,
-    timeoutMs: number,
-    intervalMs = 3000,
-  ): Promise<PapraDocument> {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const document = await this.getDocument(documentId);
-      if ((document.content ?? '').trim().length > 0) {
-        return document;
-      }
-      await sleep(intervalMs);
-    }
-    throw new Error(`papra content extraction did not complete within ${timeoutMs}ms`);
-  }
-
-  async patchDocument(
-    documentId: string,
-    patch: { name?: string; content?: string },
-  ): Promise<PapraDocument> {
-    const data = await parseJson<{ document: PapraDocument }>(
-      await this.request(`/api/organizations/${this.organizationId}/documents/${documentId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      }),
-      'patchDocument',
-    );
-    return data.document;
-  }
-
   async listTags(): Promise<PapraTag[]> {
     const data = await parseJson<{ tags: PapraTag[] }>(
       await this.request(`/api/organizations/${this.organizationId}/tags`),
@@ -131,8 +91,4 @@ export class PapraClient {
       throw new Error(`papra addTagToDocument failed: ${response.status} ${await response.text()}`);
     }
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

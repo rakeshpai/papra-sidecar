@@ -32,7 +32,6 @@ export const processedLogSchema = z.object({
   to: z.string(),
   documentId: z.string(),
   documentName: z.string(),
-  ocrLanguages: z.array(z.string()),
   tags: z.array(z.string()),
 });
 

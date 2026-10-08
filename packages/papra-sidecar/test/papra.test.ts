@@ -73,42 +73,6 @@ describe('PapraClient', () => {
     await expect(client.createDocument(file)).rejects.toThrow(/403/);
   });
 
-  it('patchDocument sends a JSON body', async () => {
-    const fetchMock: FetchMock = vi.fn(
-      async () => jsonResponse({ document: { id: 'doc1', name: 'n', content: 'c' } }),
-    );
-    const client = makeClient(fetchMock);
-    await client.patchDocument('doc1', { name: 'Bank-2026-09.pdf', content: 'markdown' });
-    const { url, init } = firstCall(fetchMock);
-    expect(url).toBe('http://papra:1221/api/organizations/org_1/documents/doc1');
-    expect(init.method).toBe('PATCH');
-    expect(init.headers).toMatchObject({ 'Content-Type': 'application/json' });
-    expect(JSON.parse(init.body as string)).toEqual({ name: 'Bank-2026-09.pdf', content: 'markdown' });
-  });
-
-  it('waitForExtraction polls until content is populated', async () => {
-    let calls = 0;
-    const fetchMock: FetchMock = vi.fn(async () => {
-      calls += 1;
-      if (calls < 3) {
-        return jsonResponse({ document: { id: 'doc1', content: '' } });
-      }
-      return jsonResponse({ document: { id: 'doc1', content: 'extracted' } });
-    });
-    const client = makeClient(fetchMock);
-    const document = await client.waitForExtraction('doc1', 5000, 5);
-    expect(document.content).toBe('extracted');
-    expect(calls).toBe(3);
-  });
-
-  it('waitForExtraction throws when content never appears', async () => {
-    const fetchMock: FetchMock = vi.fn(
-      async () => jsonResponse({ document: { id: 'doc1', content: '' } }),
-    );
-    const client = makeClient(fetchMock);
-    await expect(client.waitForExtraction('doc1', 5, 1)).rejects.toThrow(/did not complete/);
-  });
-
   it('listTags returns tags', async () => {
     const fetchMock: FetchMock = vi.fn(
       async () => jsonResponse({ tags: [{ id: 't1', name: 'bank' }] }),
